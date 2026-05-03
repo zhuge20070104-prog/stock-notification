@@ -1,0 +1,31 @@
+# 监控列表：threshold + direction(below/above) 触发告警；省略 threshold 则只展示价格
+watchlist:
+  - symbol: ORCL
+    threshold: 165
+    direction: below
+  - symbol: AMZN
+    threshold: 260
+    direction: below
+  - symbol: XLK
+    threshold: 159
+    direction: below
+  - symbol: GOOG
+    # 仅追踪价格，不告警
+
+# 本地常驻 monitor 模式的轮询间隔（秒）。Lambda 模式忽略此项。
+poll_interval_seconds: 600
+
+# 同一标的同一天只推送一次（避免连续触发刷屏）
+dedupe_per_day: true
+
+notifiers:
+  console:
+    enabled: true
+  # 飞书自定义群机器人：群设置 -> 群机器人 -> 添加机器人 -> 自定义机器人 -> 复制 Webhook
+  feishu:
+    enabled: false
+    webhook_url: ""
+  # Server酱（个人微信推送，sct.ftqq.com 注册后拿 SendKey）
+  serverchan:
+    enabled: false
+    sendkey: ""

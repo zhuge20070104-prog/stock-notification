@@ -1,0 +1,17 @@
+# 推荐：用环境变量 (TF_VAR_xxx) 而不是 tfvars 文件，避免 secret 写到磁盘。
+# 例如:
+#   $env:TF_VAR_api_key            = "long-random-string"
+#   $env:TF_VAR_feishu_webhook     = "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx"
+#   $env:TF_VAR_serverchan_sendkey = "SCTxxx..."
+#
+# 如果你坚持用 tfvars，复制此文件为 terraform.tfvars 并填值（已在 .gitignore 里）：
+
+api_key = "change-me-to-a-long-random-string"
+
+# 至少配一个推送通道，否则触发也不会通知到你（只能去 CloudWatch Logs 看）。
+feishu_webhook     = ""
+serverchan_sendkey = ""
+
+# region                = "ap-southeast-1"   # 新加坡
+# project               = "stock-watcher"
+# poll_interval_minutes = 10

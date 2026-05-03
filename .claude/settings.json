@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(if \\(-not \\(Test-Path \"c:\\\\code1\\\\stock-notification\"\\)\\) { New-Item -ItemType Directory -Path \"c:\\\\code1\\\\stock-notification\" -Force | Out-Null }; if \\(-not \\(Test-Path \"c:\\\\code1\\\\stock-notification\\\\src\"\\)\\) { New-Item -ItemType Directory -Path \"c:\\\\code1\\\\stock-notification\\\\src\" -Force | Out-Null }; \"ok\")",
+      "PowerShell($dirs = @\\(\"backend\",\"frontend\",\"frontend\\\\src\",\"terraform\",\"scripts\"\\); foreach \\($d in $dirs\\) { New-Item -ItemType Directory -Path \"c:\\\\code1\\\\stock-notification\\\\$d\" -Force | Out-Null }; \"ok\")"
+    ]
+  }
+}

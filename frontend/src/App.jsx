@@ -242,6 +242,14 @@ function SearchRow({ item, onAdd }) {
   );
 }
 
+function fmtMoney(v) {
+  if (v == null) return "—";
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  return `$${v.toFixed(2)}`;
+}
+
 function WatchCard({ item, quote, onSave, onRemove }) {
   const [editing, setEditing] = useState(false);
   const [threshold, setThreshold] = useState(item.threshold ?? "");
@@ -253,6 +261,9 @@ function WatchCard({ item, quote, onSave, onRemove }) {
     item.threshold != null &&
     (item.direction === "below" ? price < item.threshold : price > item.threshold);
 
+  const chg = quote?.day_change_pct;
+  const up = chg != null && chg >= 0;
+
   return (
     <li className={`card ${hit ? "hit" : ""}`}>
       <div className="row-between">
@@ -260,8 +271,25 @@ function WatchCard({ item, quote, onSave, onRemove }) {
           <div className="symbol">{item.symbol}</div>
           <div className="muted small">{quote?.name || ""}</div>
         </div>
-        <div className="price">{price != null ? `$${price.toFixed(2)}` : "—"}</div>
+        <div className={`price ${chg != null ? (up ? "up" : "down") : ""}`}>
+          {price != null ? `$${price.toFixed(2)}` : "—"}
+          {chg != null && (
+            <span className="small" style={{ marginLeft: 6 }}>
+              {up ? "+" : ""}{chg.toFixed(2)}%
+            </span>
+          )}
+        </div>
       </div>
+
+      {quote && (quote.pe_ratio != null || quote.market_cap != null || quote.week52_high != null) && (
+        <div className="muted small mt">
+          {quote.pe_ratio != null && <>PE {quote.pe_ratio.toFixed(1)} · </>}
+          {quote.market_cap != null && <>市值 {fmtMoney(quote.market_cap)} · </>}
+          {quote.week52_low != null && quote.week52_high != null && (
+            <>52周 ${quote.week52_low.toFixed(0)}–${quote.week52_high.toFixed(0)}</>
+          )}
+        </div>
+      )}
 
       {editing ? (
         <div className="row gap mt">

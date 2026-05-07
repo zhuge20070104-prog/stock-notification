@@ -19,3 +19,19 @@ resource "aws_dynamodb_table" "state" {
     type = "S"
   }
 }
+
+resource "aws_dynamodb_table" "metrics_cache" {
+  name         = "${var.project}-metrics-cache"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "symbol"
+
+  attribute {
+    name = "symbol"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+}

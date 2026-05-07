@@ -1,0 +1,140 @@
+{
+  "ORCL": {
+    "data": {
+      "trailingPE": 34.7724,
+      "forwardPE": 24.155588,
+      "marketCap": 558039236608,
+      "averageVolume": 28811541,
+      "fiftyTwoWeekHigh": 345.72,
+      "fiftyTwoWeekLow": 134.57,
+      "dividendYield": 1.08,
+      "beta": 1.544,
+      "shortName": "Oracle Corporation",
+      "longName": "Oracle Corporation",
+      "currency": "USD"
+    },
+    "expires_at": 1778198252
+  },
+  "AMZN": {
+    "data": {
+      "trailingPE": 32.85424,
+      "forwardPE": 27.838404,
+      "marketCap": 2958097383424,
+      "averageVolume": 50289213,
+      "fiftyTwoWeekHigh": 278.56,
+      "fiftyTwoWeekLow": 185.01,
+      "beta": 1.468,
+      "shortName": "Amazon.com, Inc.",
+      "longName": "Amazon.com, Inc.",
+      "currency": "USD"
+    },
+    "expires_at": 1778198253
+  },
+  "XLK": {
+    "data": {
+      "trailingPE": 37.247337,
+      "averageVolume": 15973925,
+      "fiftyTwoWeekHigh": 170.08,
+      "fiftyTwoWeekLow": 106.1,
+      "dividendYield": 0.48,
+      "shortName": "State Street Technology Select ",
+      "longName": "State Street Technology Select Sector SPDR ETF",
+      "currency": "USD"
+    },
+    "expires_at": 1778198254
+  },
+  "GOOG": {
+    "data": {
+      "trailingPE": 30.163359,
+      "forwardPE": 27.506447,
+      "marketCap": 4787296796672,
+      "averageVolume": 20082866,
+      "fiftyTwoWeekHigh": 396.38,
+      "fiftyTwoWeekLow": 149.49,
+      "dividendYield": 0.23,
+      "beta": 1.267,
+      "shortName": "Alphabet Inc.",
+      "longName": "Alphabet Inc.",
+      "currency": "USD"
+    },
+    "expires_at": 1778198254
+  },
+  "AMD": {
+    "data": {
+      "trailingPE": 162.69885,
+      "forwardPE": 34.28254,
+      "marketCap": 687118811136,
+      "averageVolume": 37230658,
+      "fiftyTwoWeekHigh": 430.57,
+      "fiftyTwoWeekLow": 96.88,
+      "beta": 2.399,
+      "shortName": "Advanced Micro Devices, Inc.",
+      "longName": "Advanced Micro Devices, Inc.",
+      "currency": "USD"
+    },
+    "expires_at": 1778198256
+  },
+  "DELL": {
+    "data": {
+      "trailingPE": 27.543253,
+      "forwardPE": 16.203287,
+      "marketCap": 155265073152,
+      "averageVolume": 8185460,
+      "fiftyTwoWeekHigh": 239.45,
+      "fiftyTwoWeekLow": 92.88,
+      "dividendYield": 1.16,
+      "beta": 1.062,
+      "shortName": "Dell Technologies Inc.",
+      "longName": "Dell Technologies Inc.",
+      "currency": "USD"
+    },
+    "expires_at": 1778198257
+  },
+  "UBER": {
+    "data": {
+      "trailingPE": 16.737843,
+      "forwardPE": 18.416767,
+      "marketCap": 162941042688,
+      "averageVolume": 17364913,
+      "fiftyTwoWeekHigh": 101.99,
+      "fiftyTwoWeekLow": 68.46,
+      "beta": 1.158,
+      "shortName": "Uber Technologies, Inc.",
+      "longName": "Uber Technologies, Inc.",
+      "currency": "USD"
+    },
+    "expires_at": 1778198257
+  },
+  "LRCX": {
+    "data": {
+      "trailingPE": 56.069813,
+      "forwardPE": 37.554943,
+      "marketCap": 371632209920,
+      "averageVolume": 9906776,
+      "fiftyTwoWeekHigh": 297.87,
+      "fiftyTwoWeekLow": 72.91,
+      "dividendYield": 0.38,
+      "beta": 1.819,
+      "shortName": "Lam Research Corporation",
+      "longName": "Lam Research Corporation",
+      "currency": "USD"
+    },
+    "expires_at": 1778198258
+  },
+  "NVDA": {
+    "data": {
+      "trailingPE": 42.501022,
+      "forwardPE": 18.491564,
+      "marketCap": 5051308310528,
+      "averageVolume": 170891480,
+      "fiftyTwoWeekHigh": 216.83,
+      "fiftyTwoWeekLow": 112.28,
+      "dividendYield": 0.02,
+      "beta": 2.244,
+      "shortName": "NVIDIA Corporation",
+      "longName": "NVIDIA Corporation",
+      "currency": "USD"
+    },
+    "expires_at": 1778198258
+  }
+}

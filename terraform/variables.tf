@@ -35,6 +35,30 @@ variable "poll_interval_minutes" {
   default     = 10
 }
 
+variable "min_alert_interval_hours" {
+  description = "命中阈值或涨幅榜后，每隔这么多小时重发一次。"
+  type        = number
+  default     = 1.5
+}
+
+variable "enable_gainer_alerts" {
+  description = "是否启用 Top20 涨幅榜告警。"
+  type        = bool
+  default     = true
+}
+
+variable "gainer_pct_threshold" {
+  description = "进入 Top20 后涨幅 >= 多少 % 才推送。"
+  type        = number
+  default     = 5.0
+}
+
+variable "gainer_pool_size" {
+  description = "涨幅池大小，从 movers Top N 里筛。"
+  type        = number
+  default     = 20
+}
+
 variable "lambda_zip_path" {
   type    = string
   default = "../build/lambda.zip"

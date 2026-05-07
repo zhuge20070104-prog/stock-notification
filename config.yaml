@@ -15,8 +15,14 @@ watchlist:
 # 本地常驻 monitor 模式的轮询间隔（秒）。Lambda 模式忽略此项。
 poll_interval_seconds: 600
 
-# 同一标的同一天只推送一次（避免连续触发刷屏）
-dedupe_per_day: true
+# 命中阈值后，每隔这么多小时重发一次（即使之前已经通知过）。
+# 取代旧的 dedupe_per_day。1.5h ≈ 90min，盘中 9h 大约 6 次/股票封顶。
+min_alert_interval_hours: 1.5
+
+# Top20 大盘科技股里涨幅 >= 阈值的也通知。同样按 min_alert_interval_hours 节流。
+enable_gainer_alerts: true
+gainer_pct_threshold: 5.0
+gainer_pool_size: 20
 
 notifiers:
   console:

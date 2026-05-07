@@ -31,6 +31,7 @@ data "aws_iam_policy_document" "ddb" {
     resources = [
       aws_dynamodb_table.watchlist.arn,
       aws_dynamodb_table.state.arn,
+      aws_dynamodb_table.metrics_cache.arn,
     ]
   }
 }
@@ -56,8 +57,9 @@ resource "aws_s3_object" "lambda_zip" {
 
 locals {
   lambda_env = {
-    WATCHLIST_TABLE = aws_dynamodb_table.watchlist.name
-    STATE_TABLE     = aws_dynamodb_table.state.name
+    WATCHLIST_TABLE      = aws_dynamodb_table.watchlist.name
+    STATE_TABLE          = aws_dynamodb_table.state.name
+    METRICS_CACHE_TABLE  = aws_dynamodb_table.metrics_cache.name
   }
 }
 
@@ -87,13 +89,17 @@ resource "aws_lambda_function" "monitor" {
   s3_bucket        = aws_s3_object.lambda_zip.bucket
   s3_key           = aws_s3_object.lambda_zip.key
   source_code_hash = filebase64sha256(var.lambda_zip_path)
-  timeout          = 60
+  timeout          = 90
   memory_size      = 1024
 
   environment {
     variables = merge(local.lambda_env, {
-      FEISHU_WEBHOOK     = var.feishu_webhook
-      SERVERCHAN_SENDKEY = var.serverchan_sendkey
+      FEISHU_WEBHOOK             = var.feishu_webhook
+      SERVERCHAN_SENDKEY         = var.serverchan_sendkey
+      MIN_ALERT_INTERVAL_HOURS   = tostring(var.min_alert_interval_hours)
+      GAINER_PCT_THRESHOLD       = tostring(var.gainer_pct_threshold)
+      GAINER_POOL_SIZE           = tostring(var.gainer_pool_size)
+      ENABLE_GAINER_ALERTS       = var.enable_gainer_alerts ? "1" : "0"
     })
   }
 }

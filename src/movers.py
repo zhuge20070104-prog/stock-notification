@@ -5,7 +5,7 @@
 冷启动会重算一次）。
 """
 import time
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 import yfinance as yf
 
@@ -73,3 +73,30 @@ def top_movers(limit: int = 20, direction: str = "both") -> List[Dict]:
     else:
         ranked = sorted(rows, key=lambda r: -abs(r["change_pct"]))
     return ranked[: max(1, min(limit, len(rows)))]
+
+
+def top_gainers_above(
+    pct_threshold: float = 5.0,
+    pool_size: int = 20,
+    info_provider: Optional[Callable[[str], Dict]] = None,
+) -> List:
+    """从 Top20 涨幅榜里取涨幅 >= pct_threshold 的，返回 enriched Quote 列表。
+
+    Why: 每次轮询调用一次（5 分钟进程缓存），盘中 9h × 6 次/h × 21 交易日
+    ≈ 1100 次 / 月，仍在免费层内。
+    """
+    try:
+        from .fetcher import get_quote
+    except ImportError:
+        from fetcher import get_quote  # type: ignore[no-redef]
+
+    top = top_movers(limit=pool_size, direction="up")
+    hits = [r for r in top if r.get("change_pct", 0) >= pct_threshold]
+    enriched = []
+    for r in hits:
+        try:
+            q = get_quote(r["symbol"], info_provider=info_provider)
+            enriched.append(q)
+        except Exception as e:
+            print(f"[warn] enrich {r['symbol']}: {e}")
+    return enriched

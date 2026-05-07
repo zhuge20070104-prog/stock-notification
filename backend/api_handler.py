@@ -10,10 +10,34 @@ Routes:
 import json
 import os
 
-from fetcher import get_quote
+from fetcher import fetch_info, get_quote
 from lookup import search as do_search
 from movers import top_movers
-from store import delete_watchlist, list_watchlist, upsert_watchlist
+from store import (
+    delete_watchlist,
+    get_cached_info,
+    list_watchlist,
+    put_cached_info,
+    upsert_watchlist,
+)
+
+
+def _make_info_provider(ttl_seconds: int = 86400):
+    def provider(symbol: str):
+        cached = get_cached_info(symbol)
+        if cached is not None:
+            return cached
+        try:
+            data = fetch_info(symbol)
+        except Exception:
+            data = {}
+        if data:
+            try:
+                put_cached_info(symbol, data, ttl_seconds=ttl_seconds)
+            except Exception as e:
+                print(f"[warn] cache write {symbol}: {e}")
+        return data
+    return provider
 
 
 def _resp(status: int, body):
@@ -77,10 +101,29 @@ def _route(event):
     if path == "/quote" and method == "GET":
         symbols = [s.strip().upper() for s in (qs.get("symbols") or "").split(",") if s.strip()]
         out = []
+        info_provider = _make_info_provider()
         for s in symbols:
             try:
-                q = get_quote(s)
-                out.append({"symbol": q.symbol, "price": q.price, "name": q.name, "currency": q.currency})
+                q = get_quote(s, info_provider=info_provider)
+                out.append({
+                    "symbol": q.symbol,
+                    "price": q.price,
+                    "name": q.name,
+                    "currency": q.currency,
+                    "previous_close": q.previous_close,
+                    "day_change_pct": q.day_change_pct,
+                    "day_high": q.day_high,
+                    "day_low": q.day_low,
+                    "volume": q.volume,
+                    "pe_ratio": q.pe_ratio,
+                    "forward_pe": q.forward_pe,
+                    "market_cap": q.market_cap,
+                    "avg_volume": q.avg_volume,
+                    "week52_high": q.week52_high,
+                    "week52_low": q.week52_low,
+                    "dividend_yield": q.dividend_yield,
+                    "beta": q.beta,
+                })
             except Exception as e:
                 out.append({"symbol": s, "error": str(e)})
         return _resp(200, out)

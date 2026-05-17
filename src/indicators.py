@@ -100,6 +100,23 @@ def kst(closes: pd.Series) -> Tuple[Optional[float], Optional[str]]:
     return diff, "中性"
 
 
+def moving_averages(
+    closes: pd.Series, windows=(5, 20, 60, 120, 250)
+) -> dict:
+    """Return {"MA5": float, "MA20": float, ...}. None when window > available bars."""
+    out: dict = {}
+    if closes is None or len(closes) == 0:
+        return out
+    for w in windows:
+        key = f"MA{w}"
+        if len(closes) < w:
+            out[key] = None
+            continue
+        v = _last(closes.rolling(w).mean())
+        out[key] = v
+    return out
+
+
 def compute_signals(df: pd.DataFrame) -> dict:
     """df: yfinance 风格的 OHLC DataFrame（columns: Open/High/Low/Close...）。"""
     if df is None or df.empty or "Close" not in df.columns:

@@ -37,10 +37,16 @@ def list_watchlist() -> List[dict]:
     return sorted([_decode(i) for i in items], key=lambda x: x["symbol"])
 
 
-def upsert_watchlist(symbol: str, threshold: Optional[float], direction: str = "below") -> dict:
-    item = {"symbol": symbol.upper(), "direction": direction}
-    if threshold is not None:
-        item["threshold"] = Decimal(str(threshold))
+def upsert_watchlist(
+    symbol: str,
+    strategy_horizon: str = "short",
+    strategy_notes: Optional[str] = None,
+) -> dict:
+    """v2: only symbol + strategy fields. Legacy threshold/direction are ignored
+    (rows with those fields still in DDB are read fine; new writes won't set them)."""
+    item = {"symbol": symbol.upper(), "strategy_horizon": strategy_horizon}
+    if strategy_notes:
+        item["strategy_notes"] = strategy_notes
     _watchlist().put_item(Item=item)
     return _decode(item)
 
@@ -73,6 +79,25 @@ def get_alert_ts(symbol: str, kind: str = "threshold") -> Optional[int]:
         return None
     ts = item.get("last_alert_ts")
     return int(ts) if ts is not None else None
+
+
+def count_advice_today(date_str: str) -> int:
+    """Count advice records emitted today. Cheap-ish: scans state table once per call.
+    Acceptable because daily volume is tiny (<200) and advisor only runs on alert."""
+    items = _state().scan().get("Items", [])
+    n = 0
+    for it in items:
+        sym = it.get("symbol", "")
+        if not sym.endswith("#advice"):
+            continue
+        ts = int(it.get("last_alert_ts") or 0)
+        if not ts:
+            continue
+        import datetime
+        d = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+        if d == date_str:
+            n += 1
+    return n
 
 
 def get_cached_info(symbol: str) -> Optional[Dict]:

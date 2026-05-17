@@ -86,11 +86,15 @@ def _route(event):
         symbol = (body.get("symbol") or "").strip().upper()
         if not symbol:
             return _resp(400, {"error": "symbol required"})
-        threshold = body.get("threshold")
-        direction = body.get("direction") or "below"
-        if direction not in ("below", "above"):
-            return _resp(400, {"error": "direction must be 'below' or 'above'"})
-        item = upsert_watchlist(symbol, threshold, direction)
+        horizon = body.get("strategy_horizon") or "short"
+        if horizon not in ("short", "long", "skip"):
+            return _resp(400, {"error": "strategy_horizon must be short/long/skip"})
+        notes = body.get("strategy_notes")
+        if notes is not None:
+            notes = str(notes)[:200]
+        item = upsert_watchlist(symbol,
+                                strategy_horizon=horizon,
+                                strategy_notes=notes)
         return _resp(200, item)
 
     if path.startswith("/watchlist/") and method == "DELETE":

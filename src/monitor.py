@@ -1,27 +1,36 @@
+"""Local CLI mirror of backend/monitor_handler.py (v2).
+
+State lives in state.json + metrics_cache.json instead of DynamoDB; otherwise
+the pipeline is identical: candidate pool = watchlist + movers, LLM evaluates
+each, only buy/sell with confidence ≥ threshold get pushed.
+"""
+import datetime
 import json
 import os
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
+from .advisor import advise, advisor_enabled, should_push
 from .fetcher import Quote, batch_history, fetch_info, get_quote
 from .indicators import apply_signals
-from .movers import top_gainers_above
+from .movers import top_movers
+from .news import fetch_news
 from .notifier import (
     Notifier,
     fan_out,
+    render_advice,
     render_error_alert,
-    render_gainer_alert,
-    render_threshold_alert,
 )
 
 
 @dataclass
-class _Alert:
-    kind: str  # "threshold" | "gainer"
-    quote: Quote
-    threshold: Optional[float] = None
-    direction: Optional[str] = None
+class _Candidate:
+    symbol: str
+    source: str          # "watchlist" | "mover"
+    horizon: str = "short"
+    notes: str = ""
+    change_pct: float = 0.0
 
 
 def _load_json(path: str) -> dict:
@@ -40,10 +49,6 @@ def _save_json(state: dict, path: str) -> None:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[warn] failed to write {path}: {e}")
-
-
-def _hit(price: float, threshold: float, direction: str) -> bool:
-    return price < threshold if direction == "below" else price > threshold
 
 
 def _make_file_info_provider(cache_path: str, ttl_seconds: int = 86400) -> Callable[[str], Dict]:
@@ -72,23 +77,90 @@ def _make_file_info_provider(cache_path: str, ttl_seconds: int = 86400) -> Calla
     return provider
 
 
-def _enrich_with_indicators(alerts: List[_Alert]) -> None:
-    """Batch-download 3mo history once for all alerted symbols, attach signals."""
-    if not alerts:
-        return
-    syms = list({a.quote.symbol for a in alerts})
+def _build_candidates(watchlist_items: List[dict]) -> List[_Candidate]:
+    max_n = int(float(os.environ.get("ADVISOR_MAX_CANDIDATES", "30")))
+    mover_pct = float(os.environ.get("MOVER_CHANGE_PCT_THRESHOLD", "3.0"))
+
+    seen = set()
+    wl: List[_Candidate] = []
+    for it in watchlist_items:
+        sym = (it.get("symbol") or "").upper()
+        if not sym:
+            continue
+        horizon = str(it.get("strategy_horizon") or "short")
+        if horizon == "skip":
+            continue
+        wl.append(_Candidate(
+            symbol=sym, source="watchlist", horizon=horizon,
+            notes=str(it.get("strategy_notes") or ""),
+        ))
+        seen.add(sym)
+
+    mv: List[_Candidate] = []
     try:
-        hist = batch_history(syms, period="3mo")
+        movers = top_movers(limit=40, direction="both")
     except Exception as e:
-        print(f"[warn] batch_history failed: {e}")
-        return
-    for a in alerts:
-        df = hist.get(a.quote.symbol)
-        if df is not None:
-            try:
-                apply_signals(a.quote, df)
-            except Exception as e:
-                print(f"[warn] indicators {a.quote.symbol}: {e}")
+        print(f"[warn] top_movers failed: {e}")
+        movers = []
+    for r in movers:
+        sym = (r.get("symbol") or "").upper()
+        if not sym or sym in seen:
+            continue
+        chg = float(r.get("change_pct") or 0.0)
+        if abs(chg) < mover_pct:
+            continue
+        mv.append(_Candidate(symbol=sym, source="mover", change_pct=chg))
+        seen.add(sym)
+
+    mv.sort(key=lambda c: -abs(c.change_pct))
+    quota = max(0, max_n - len(wl))
+    return wl + mv[:quota]
+
+
+def _evaluate_one(c: _Candidate, df_3mo, info_provider,
+                  notifiers: List[Notifier], state: dict, now: int) -> Optional[str]:
+    cooldown_h = float(os.environ.get("ADVISOR_COOLDOWN_HOURS", "6.0"))
+    last = int((state.get(f"{c.symbol}#advice") or {}).get("last_alert_ts", 0))
+    if now - last < int(cooldown_h * 3600):
+        print(f"[advisor] {c.symbol} cooldown, skip")
+        return None
+
+    try:
+        q = get_quote(c.symbol, info_provider=info_provider)
+    except Exception as e:
+        print(f"[warn] quote {c.symbol}: {e}")
+        return None
+
+    if df_3mo is not None:
+        try:
+            apply_signals(q, df_3mo)
+        except Exception as e:
+            print(f"[warn] indicators {c.symbol}: {e}")
+
+    try:
+        df_1y = batch_history([c.symbol], period="1y").get(c.symbol)
+    except Exception:
+        df_1y = None
+    try:
+        news = fetch_news(c.symbol)
+    except Exception:
+        news = []
+
+    try:
+        adv = advise(q, df_3mo, df_1y, news, horizon=c.horizon, notes=c.notes)
+    except Exception as e:
+        print(f"[warn] advisor {c.symbol}: {e}")
+        return None
+
+    if not should_push(adv, source=c.source):
+        verdict = "—" if adv is None else f"{adv.action} ({adv.confidence:.0%})"
+        print(f"[advisor] {c.symbol} silent: {verdict}")
+        return None
+
+    title, body = render_advice(q, adv, source=c.source)
+    fan_out(notifiers, title, body)
+    state[f"{c.symbol}#advice"] = {"last_alert_ts": now, "price": q.price}
+    return c.symbol
 
 
 def check_once(
@@ -96,88 +168,61 @@ def check_once(
     notifiers: List[Notifier],
     state_path: str = "state.json",
     metrics_cache_path: str = "metrics_cache.json",
-    min_alert_interval_hours: float = 1.5,
-    enable_gainer_alerts: bool = True,
-    gainer_pct_threshold: float = 5.0,
-    gainer_pool_size: int = 20,
+    **_legacy_kwargs,
 ) -> Dict:
+    """v2 entry. legacy kwargs (min_alert_interval_hours, gainer_*) accepted but ignored."""
+    if not advisor_enabled():
+        print("[advisor] disabled (no DASHSCOPE_API_KEY or ADVISOR_ENABLED=0)")
+        return {"checked": 0, "pushed": []}
+
     state = _load_json(state_path)
     info_provider = _make_file_info_provider(metrics_cache_path)
-    interval_s = int(min_alert_interval_hours * 3600)
     now = int(time.time())
-    alerts: List[_Alert] = []
 
-    for item in watchlist:
-        sym = item["symbol"].upper()
-        try:
-            q = get_quote(sym, info_provider=info_provider)
-        except Exception as e:
-            print(f"[warn] {sym}: {e}")
+    candidates = _build_candidates(watchlist)
+    print(f"[run] candidates: {len(candidates)} "
+          f"(watchlist={sum(1 for c in candidates if c.source=='watchlist')}, "
+          f"movers={sum(1 for c in candidates if c.source=='mover')})")
+    if not candidates:
+        return {"checked": 0, "pushed": []}
+
+    budget = int(float(os.environ.get("ADVISOR_DAILY_BUDGET", "200")))
+    today = datetime.datetime.utcfromtimestamp(now).strftime("%Y-%m-%d")
+    used = 0
+    for k, v in state.items():
+        if not k.endswith("#advice"):
             continue
-
-        threshold = item.get("threshold")
-        direction = item.get("direction", "below")
-
-        if threshold is None:
-            print(f"{sym} {q.name}: ${q.price:.2f}")
+        ts = int((v or {}).get("last_alert_ts") or 0)
+        if not ts:
             continue
+        if datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d") == today:
+            used += 1
+    if used >= budget:
+        print(f"[advisor] daily budget exhausted ({used}/{budget})")
+        return {"checked": 0, "pushed": [], "skipped_budget": True}
 
-        hit = _hit(q.price, threshold, direction)
-        status = "HIT" if hit else "ok"
-        print(f"{sym} {q.name}: ${q.price:.2f} (threshold {direction} {threshold}) -> {status}")
-        if not hit:
-            continue
+    syms = [c.symbol for c in candidates]
+    try:
+        hist = batch_history(syms, period="3mo")
+    except Exception as e:
+        print(f"[warn] batch_history failed: {e}")
+        hist = {}
 
-        key = f"{sym}#threshold"
-        last_ts = int((state.get(key) or {}).get("last_alert_ts", 0))
-        if now - last_ts < interval_s:
-            continue
-
-        alerts.append(_Alert(kind="threshold", quote=q, threshold=float(threshold), direction=direction))
-
-    if enable_gainer_alerts:
-        try:
-            hits: List[Quote] = top_gainers_above(
-                pct_threshold=gainer_pct_threshold,
-                pool_size=gainer_pool_size,
-                info_provider=info_provider,
-            )
-        except Exception as e:
-            print(f"[warn] gainers scan failed: {e}")
-            hits = []
-
-        for q in hits:
-            key = f"{q.symbol}#gainer"
-            last_ts = int((state.get(key) or {}).get("last_alert_ts", 0))
-            if now - last_ts < interval_s:
-                continue
-            alerts.append(_Alert(kind="gainer", quote=q))
-
-    _enrich_with_indicators(alerts)
-
-    triggered: List[str] = []
-    gainers: List[str] = []
-    for a in alerts:
-        q = a.quote
-        if a.kind == "threshold":
-            arrow = "📉" if a.direction == "below" else "📈"
-            title = f"{arrow} {q.symbol} {a.direction} ${a.threshold}"
-            msg = render_threshold_alert(q, float(a.threshold or 0), a.direction or "below")
-            fan_out(notifiers, title, msg)
-            state[f"{q.symbol}#threshold"] = {"last_alert_ts": now, "price": q.price}
-            triggered.append(q.symbol)
-        else:
-            title = f"🚀 {q.symbol} {(q.day_change_pct or 0):+.2f}% (Top20)"
-            msg = render_gainer_alert(q)
-            fan_out(notifiers, title, msg)
-            state[f"{q.symbol}#gainer"] = {"last_alert_ts": now, "price": q.price}
-            gainers.append(q.symbol)
+    pushed: List[str] = []
+    for c in candidates:
+        if used >= budget:
+            print(f"[advisor] budget hit mid-run, stop at {c.symbol}")
+            break
+        r = _evaluate_one(c, hist.get(c.symbol), info_provider, notifiers, state, now)
+        used += 1
+        if r:
+            pushed.append(r)
 
     flush = getattr(info_provider, "flush", None)
     if callable(flush):
         flush()
     _save_json(state, state_path)
-    return {"triggered": triggered, "gainers": gainers}
+    return {"checked": len(candidates), "pushed": pushed}
 
 
 def check_with_failure_alert(

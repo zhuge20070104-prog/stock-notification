@@ -109,7 +109,7 @@ init:
 	@cd terraform && terraform init -input=false -upgrade
 
 apply: build
-	@cd terraform && terraform init -input=false && terraform apply -input=false -auto-approve
+	@cd terraform && terraform init -reconfigure -input=false && terraform apply -input=false -auto-approve
 
 frontend: check-env
 	@cd terraform && \

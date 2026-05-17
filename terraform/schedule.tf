@@ -1,11 +1,6 @@
-# 调度全部用北京时间 (Asia/Shanghai)。EventBridge Scheduler 原生支持时区。
-#
-# 美股盘中（夏令时 EDT 9:30-16:00 ET = 北京 21:30-04:00 次日；
-#         冬令时 EST 9:30-16:00 ET = 北京 22:30-05:00 次日）。
-# 用两条 schedule 拼出来，覆盖夏冬令时：
-#   evening : Mon-Fri 21:00-23:59 北京时间
-#   morning : Tue-Sat 00:00-05:59 北京时间
-# 北京时间不切换 DST，所以两条规则就够。
+# 北京时间每天 10:00 和 18:00 各触发一次。
+# 不管美股开没开盘 —— 盘外 yfinance 返回的是上一交易日收盘价，是用户明确要的"按时简报"行为。
+# 一次 watchlist + Top movers 评估，结果（含 hold）都推送，作为早晚的固定播报。
 
 resource "aws_iam_role" "scheduler" {
   name = "${var.project}-scheduler"
@@ -32,30 +27,15 @@ resource "aws_iam_role_policy" "scheduler_invoke" {
   })
 }
 
-resource "aws_scheduler_schedule" "monitor_evening_bj" {
-  name = "${var.project}-monitor-evening-bj"
+resource "aws_scheduler_schedule" "monitor_bj_daily" {
+  name = "${var.project}-monitor-bj-daily"
 
   flexible_time_window {
     mode = "OFF"
   }
 
-  schedule_expression          = "cron(*/${var.poll_interval_minutes} 21-23 ? * MON-FRI *)"
-  schedule_expression_timezone = "Asia/Shanghai"
-
-  target {
-    arn      = aws_lambda_function.monitor.arn
-    role_arn = aws_iam_role.scheduler.arn
-  }
-}
-
-resource "aws_scheduler_schedule" "monitor_morning_bj" {
-  name = "${var.project}-monitor-morning-bj"
-
-  flexible_time_window {
-    mode = "OFF"
-  }
-
-  schedule_expression          = "cron(*/${var.poll_interval_minutes} 0-5 ? * TUE-SAT *)"
+  # 每天 10:00 和 18:00 (北京时间)
+  schedule_expression          = "cron(0 10,18 * * ? *)"
   schedule_expression_timezone = "Asia/Shanghai"
 
   target {

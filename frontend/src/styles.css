@@ -37,6 +37,8 @@ h2 { font-size: 16px; margin: 0; font-weight: 600; }
 
 .row { display: flex; align-items: center; }
 .row.gap { gap: 8px; }
+.col { display: flex; flex-direction: column; }
+.col.gap { gap: 8px; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-title { margin: 16px 0 8px; }
 .mt { margin-top: 10px; }

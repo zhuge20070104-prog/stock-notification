@@ -1,30 +1,35 @@
-"""Scheduled Lambda: pull each watched ticker, check threshold, push alerts.
+"""Scheduled Lambda: LLM-driven trading suggestion fan-out (v2).
 
-Phase-based:
-  1. Quote each watchlist symbol; collect threshold hits that pass 1.5h dedupe.
-  2. Scan Top20 movers; collect gainers >= 5% that pass 1.5h dedupe.
-  3. ONE batched yf.download(period='3mo') for every alerted symbol → attach
-     Williams %R / MACD / KST signals to each Quote.
-  4. Render rich card and fan out to feishu / Server酱 / console.
+Pipeline:
+  1. Build candidate pool = watchlist (all, unless horizon='skip')
+     + TECH_TICKERS movers with |change_pct| >= MOVER_CHANGE_PCT_THRESHOLD.
+  2. Cap to ADVISOR_MAX_CANDIDATES; watchlist always wins, movers ranked by |change|.
+  3. Quote each candidate, batch-download 3mo history, attach indicators.
+  4. For each, fetch 1y history (for MA250) + news, call LLM.
+  5. Push only if action ∈ {buy, sell} AND confidence >= ADVISOR_PUSH_MIN_CONFIDENCE.
+     Otherwise silent. Per-symbol 6h cooldown via state table (kind='advice').
 
-Failures bubble up as a notification so silent failures don't go unseen.
+There are no threshold/gainer alerts in v2 — LLM is the sole gate.
 """
+import datetime
 import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from advisor import advise, advisor_enabled, should_push
 from fetcher import Quote, batch_history, fetch_info, get_quote
 from indicators import apply_signals
-from movers import top_gainers_above
+from movers import top_movers
+from news import fetch_news
 from notifier import (
     build_notifiers,
     fan_out,
+    render_advice,
     render_error_alert,
-    render_gainer_alert,
-    render_threshold_alert,
 )
 from store import (
+    count_advice_today,
     get_alert_ts,
     get_cached_info,
     list_watchlist,
@@ -34,11 +39,12 @@ from store import (
 
 
 @dataclass
-class _Alert:
-    kind: str  # "threshold" | "gainer"
-    quote: Quote
-    threshold: Optional[float] = None
-    direction: Optional[str] = None
+class _Candidate:
+    symbol: str
+    source: str         # "watchlist" | "mover"
+    horizon: str = "short"
+    notes: str = ""
+    change_pct: float = 0.0   # 仅 mover 用于排序
 
 
 def _notifier_cfg() -> dict:
@@ -73,103 +79,142 @@ def _make_ddb_info_provider(ttl_seconds: int = 86400):
     return provider
 
 
-def _hit(price: float, threshold: float, direction: str) -> bool:
-    return price < threshold if direction == "below" else price > threshold
+def _build_candidates(watchlist_items: List[dict]) -> List[_Candidate]:
+    max_n = int(float(os.environ.get("ADVISOR_MAX_CANDIDATES", "30")))
+    mover_pct = float(os.environ.get("MOVER_CHANGE_PCT_THRESHOLD", "3.0"))
+
+    seen = set()
+    wl: List[_Candidate] = []
+    for it in watchlist_items:
+        sym = (it.get("symbol") or "").upper()
+        if not sym:
+            continue
+        horizon = str(it.get("strategy_horizon") or "short")
+        if horizon == "skip":
+            continue
+        wl.append(_Candidate(
+            symbol=sym, source="watchlist", horizon=horizon,
+            notes=str(it.get("strategy_notes") or ""),
+        ))
+        seen.add(sym)
+
+    mv: List[_Candidate] = []
+    try:
+        movers = top_movers(limit=40, direction="both")
+    except Exception as e:
+        print(f"[warn] top_movers failed: {e}")
+        movers = []
+    for r in movers:
+        sym = (r.get("symbol") or "").upper()
+        if not sym or sym in seen:
+            continue
+        chg = float(r.get("change_pct") or 0.0)
+        if abs(chg) < mover_pct:
+            continue
+        mv.append(_Candidate(symbol=sym, source="mover", change_pct=chg))
+        seen.add(sym)
+
+    mv.sort(key=lambda c: -abs(c.change_pct))
+    quota = max(0, max_n - len(wl))
+    return wl + mv[:quota]
 
 
-def _enrich_with_indicators(alerts: List[_Alert]) -> None:
-    if not alerts:
-        return
-    syms = list({a.quote.symbol for a in alerts})
+def _evaluate_one(c: _Candidate, df_3mo, info_provider, notifiers, now: int) -> Optional[str]:
+    """Quote + LLM + push for one candidate. Returns symbol if pushed else None."""
+    cooldown_h = float(os.environ.get("ADVISOR_COOLDOWN_HOURS", "6.0"))
+    last = get_alert_ts(c.symbol, kind="advice") or 0
+    if now - last < int(cooldown_h * 3600):
+        print(f"[advisor] {c.symbol} cooldown, skip")
+        return None
+
+    try:
+        q = get_quote(c.symbol, info_provider=info_provider)
+    except Exception as e:
+        print(f"[warn] quote {c.symbol}: {e}")
+        return None
+
+    if df_3mo is not None:
+        try:
+            apply_signals(q, df_3mo)
+        except Exception as e:
+            print(f"[warn] indicators {c.symbol}: {e}")
+
+    try:
+        df_1y = batch_history([c.symbol], period="1y").get(c.symbol)
+    except Exception:
+        df_1y = None
+    try:
+        news = fetch_news(c.symbol)
+    except Exception:
+        news = []
+
+    try:
+        adv = advise(q, df_3mo, df_1y, news, horizon=c.horizon, notes=c.notes)
+    except Exception as e:
+        print(f"[warn] advisor {c.symbol}: {e}")
+        return None
+
+    if not should_push(adv, source=c.source):
+        verdict = "—" if adv is None else f"{adv.action} ({adv.confidence:.0%})"
+        print(f"[advisor] {c.symbol} silent: {verdict}")
+        return None
+
+    title, body = render_advice(q, adv, source=c.source)
+    fan_out(notifiers, title, body)
+    try:
+        set_alert_state(c.symbol, now, q.price, kind="advice")
+    except Exception as e:
+        print(f"[warn] state {c.symbol}: {e}")
+    return c.symbol
+
+
+def _run(notifiers) -> Dict:
+    if not advisor_enabled():
+        print("[advisor] disabled (no DASHSCOPE_API_KEY or ADVISOR_ENABLED=0)")
+        return {"checked": 0, "pushed": [], "skipped_budget": False}
+
+    info_provider = _make_ddb_info_provider()
+    watchlist = list_watchlist()
+    candidates = _build_candidates(watchlist)
+    print(f"[run] candidates: {len(candidates)} "
+          f"(watchlist={sum(1 for c in candidates if c.source=='watchlist')}, "
+          f"movers={sum(1 for c in candidates if c.source=='mover')})")
+
+    if not candidates:
+        return {"checked": 0, "pushed": []}
+
+    # Daily budget guard (counts today's advice records in state table)
+    budget = int(float(os.environ.get("ADVISOR_DAILY_BUDGET", "200")))
+    now = int(time.time())
+    today = datetime.datetime.utcfromtimestamp(now).strftime("%Y-%m-%d")
+    try:
+        used = count_advice_today(today)
+    except Exception as e:
+        print(f"[warn] budget check failed: {e}")
+        used = 0
+    if used >= budget:
+        print(f"[advisor] daily budget exhausted ({used}/{budget})")
+        return {"checked": 0, "pushed": [], "skipped_budget": True}
+
+    # ONE batched 3mo history call covering all candidates
+    syms = [c.symbol for c in candidates]
     try:
         hist = batch_history(syms, period="3mo")
     except Exception as e:
         print(f"[warn] batch_history failed: {e}")
-        return
-    for a in alerts:
-        df = hist.get(a.quote.symbol)
-        if df is not None:
-            try:
-                apply_signals(a.quote, df)
-            except Exception as e:
-                print(f"[warn] indicators {a.quote.symbol}: {e}")
+        hist = {}
 
+    pushed: List[str] = []
+    for c in candidates:
+        if used >= budget:
+            print(f"[advisor] budget hit mid-run, stop at {c.symbol}")
+            break
+        result = _evaluate_one(c, hist.get(c.symbol), info_provider, notifiers, now)
+        used += 1
+        if result:
+            pushed.append(result)
 
-def _run(notifiers) -> Dict:
-    interval_h = float(os.environ.get("MIN_ALERT_INTERVAL_HOURS", "1.5"))
-    interval_s = int(interval_h * 3600)
-    gainer_pct = float(os.environ.get("GAINER_PCT_THRESHOLD", "5"))
-    gainer_pool = int(os.environ.get("GAINER_POOL_SIZE", "20"))
-    enable_gainers = os.environ.get("ENABLE_GAINER_ALERTS", "1") not in ("0", "false", "False")
-
-    info_provider = _make_ddb_info_provider()
-    watchlist = list_watchlist()
-    now = int(time.time())
-    alerts: List[_Alert] = []
-
-    for item in watchlist:
-        sym = item["symbol"]
-        threshold = item.get("threshold")
-        direction = item.get("direction", "below")
-
-        try:
-            q = get_quote(sym, info_provider=info_provider)
-        except Exception as e:
-            print(f"[warn] {sym}: {e}")
-            continue
-
-        if threshold is None:
-            continue
-
-        hit = _hit(q.price, threshold, direction)
-        print(f"{sym}: ${q.price:.2f} threshold {direction} {threshold} -> {'HIT' if hit else 'ok'}")
-        if not hit:
-            continue
-
-        last_ts = get_alert_ts(sym, kind="threshold") or 0
-        if now - last_ts < interval_s:
-            continue
-
-        alerts.append(_Alert(kind="threshold", quote=q, threshold=float(threshold), direction=direction))
-
-    if enable_gainers:
-        try:
-            hits: List[Quote] = top_gainers_above(
-                pct_threshold=gainer_pct,
-                pool_size=gainer_pool,
-                info_provider=info_provider,
-            )
-        except Exception as e:
-            print(f"[warn] gainers scan: {e}")
-            hits = []
-
-        for q in hits:
-            last_ts = get_alert_ts(q.symbol, kind="gainer") or 0
-            if now - last_ts < interval_s:
-                continue
-            alerts.append(_Alert(kind="gainer", quote=q))
-
-    _enrich_with_indicators(alerts)
-
-    triggered: List[str] = []
-    gainers: List[str] = []
-    for a in alerts:
-        q = a.quote
-        if a.kind == "threshold":
-            arrow = "📉" if a.direction == "below" else "📈"
-            title = f"{arrow} {q.symbol} {a.direction} ${a.threshold}"
-            msg = render_threshold_alert(q, float(a.threshold or 0), a.direction or "below")
-            fan_out(notifiers, title, msg)
-            set_alert_state(q.symbol, now, q.price, kind="threshold")
-            triggered.append(q.symbol)
-        else:
-            title = f"🚀 {q.symbol} {(q.day_change_pct or 0):+.2f}% (Top20)"
-            msg = render_gainer_alert(q)
-            fan_out(notifiers, title, msg)
-            set_alert_state(q.symbol, now, q.price, kind="gainer")
-            gainers.append(q.symbol)
-
-    return {"checked": len(watchlist), "triggered": triggered, "gainers": gainers}
+    return {"checked": len(candidates), "pushed": pushed}
 
 
 def handler(event, context):

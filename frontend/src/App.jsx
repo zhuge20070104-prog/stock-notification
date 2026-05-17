@@ -50,11 +50,10 @@ export default function App() {
     }
   };
 
-  const upsert = async (symbol, threshold, direction) => {
+  const upsert = async (symbol, strategy_horizon = "short", strategy_notes = "") => {
     setError("");
     try {
-      const t = threshold === "" || threshold == null ? null : Number(threshold);
-      await api.upsert({ symbol, threshold: t, direction });
+      await api.upsert({ symbol, strategy_horizon, strategy_notes });
       setResults([]); setSearch("");
       await refresh();
     } catch (e) {
@@ -205,7 +204,7 @@ function MoverRow({ item, onAdd }) {
         </div>
       </div>
       <div className="row gap mt">
-        <button className="ghost" onClick={() => onAdd(item.symbol, "", "below")}>
+        <button className="ghost" onClick={() => onAdd(item.symbol, "short", "")}>
           加入关注
         </button>
       </div>
@@ -214,8 +213,8 @@ function MoverRow({ item, onAdd }) {
 }
 
 function SearchRow({ item, onAdd }) {
-  const [threshold, setThreshold] = useState("");
-  const [direction, setDirection] = useState("below");
+  const [horizon, setHorizon] = useState("short");
+  const [notes, setNotes] = useState("");
   return (
     <li className="card alt">
       <div className="row-between">
@@ -225,18 +224,19 @@ function SearchRow({ item, onAdd }) {
         </div>
       </div>
       <div className="row gap mt">
-        <select value={direction} onChange={(e) => setDirection(e.target.value)}>
-          <option value="below">低于</option>
-          <option value="above">高于</option>
+        <select value={horizon} onChange={(e) => setHorizon(e.target.value)}>
+          <option value="short">短线评估</option>
+          <option value="long">长线持有</option>
+          <option value="skip">不评估</option>
         </select>
         <input
-          type="number"
-          inputMode="decimal"
-          placeholder="阈值"
-          value={threshold}
-          onChange={(e) => setThreshold(e.target.value)}
+          type="text"
+          placeholder="策略备注 (可选)"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          maxLength={200}
         />
-        <button onClick={() => onAdd(item.symbol, threshold, direction)}>添加</button>
+        <button onClick={() => onAdd(item.symbol, horizon, notes)}>添加</button>
       </div>
     </li>
   );
@@ -250,22 +250,19 @@ function fmtMoney(v) {
   return `$${v.toFixed(2)}`;
 }
 
+const HORIZON_LABEL = { short: "短线评估", long: "长线持有", skip: "不评估" };
+
 function WatchCard({ item, quote, onSave, onRemove }) {
   const [editing, setEditing] = useState(false);
-  const [threshold, setThreshold] = useState(item.threshold ?? "");
-  const [direction, setDirection] = useState(item.direction || "below");
+  const [horizon, setHorizon] = useState(item.strategy_horizon || "short");
+  const [notes, setNotes] = useState(item.strategy_notes || "");
 
   const price = quote?.price;
-  const hit =
-    price != null &&
-    item.threshold != null &&
-    (item.direction === "below" ? price < item.threshold : price > item.threshold);
-
   const chg = quote?.day_change_pct;
   const up = chg != null && chg >= 0;
 
   return (
-    <li className={`card ${hit ? "hit" : ""}`}>
+    <li className="card">
       <div className="row-between">
         <div>
           <div className="symbol">{item.symbol}</div>
@@ -292,26 +289,29 @@ function WatchCard({ item, quote, onSave, onRemove }) {
       )}
 
       {editing ? (
-        <div className="row gap mt">
-          <select value={direction} onChange={(e) => setDirection(e.target.value)}>
-            <option value="below">低于</option>
-            <option value="above">高于</option>
+        <div className="col gap mt">
+          <select value={horizon} onChange={(e) => setHorizon(e.target.value)}>
+            <option value="short">短线评估</option>
+            <option value="long">长线持有</option>
+            <option value="skip">不评估</option>
           </select>
           <input
-            type="number"
-            inputMode="decimal"
-            value={threshold}
-            onChange={(e) => setThreshold(e.target.value)}
+            type="text"
+            placeholder="策略备注 (可选)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            maxLength={200}
           />
-          <button onClick={async () => { await onSave(item.symbol, threshold, direction); setEditing(false); }}>保存</button>
-          <button className="ghost" onClick={() => setEditing(false)}>取消</button>
+          <div className="row gap">
+            <button onClick={async () => { await onSave(item.symbol, horizon, notes); setEditing(false); }}>保存</button>
+            <button className="ghost" onClick={() => setEditing(false)}>取消</button>
+          </div>
         </div>
       ) : (
         <div className="row-between mt">
           <div className="muted small">
-            {item.threshold != null
-              ? `${item.direction === "below" ? "低于" : "高于"} $${item.threshold}`
-              : "仅追踪价格"}
+            {HORIZON_LABEL[item.strategy_horizon] || "短线评估"}
+            {item.strategy_notes ? ` · ${item.strategy_notes}` : ""}
           </div>
           <div className="row gap">
             <button className="ghost" onClick={() => setEditing(true)}>编辑</button>

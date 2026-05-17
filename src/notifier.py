@@ -24,9 +24,9 @@ class FeishuNotifier:
         self.url = webhook_url
 
     def send(self, title: str, message: str) -> None:
-        if "📉" in title or "below" in title.lower():
+        if "🔴" in title or "📉" in title or "below" in title.lower():
             template = "red"
-        elif "📈" in title or "above" in title.lower() or "🚀" in title:
+        elif "🟢" in title or "📈" in title or "above" in title.lower() or "🚀" in title:
             template = "green"
         elif "⚠" in title or "ERROR" in title.upper():
             template = "orange"
@@ -174,3 +174,37 @@ def render_gainer_alert(q: Quote) -> str:
 
 def render_error_alert(context: str, err: BaseException) -> str:
     return f"**{context}** 执行失败：\n```\n{type(err).__name__}: {err}\n```"
+
+
+def render_advice(q: Quote, adv, source: str = "watchlist") -> tuple:
+    """Render an Advice object → (title, lark_md body) for fan_out.
+
+    `source`: 'watchlist' (⭐ 用户关注列表) or 'mover' (🔍 异动发现) — shown in title.
+    """
+    emoji = {"buy": "🟢", "sell": "🔴", "hold": "⚪"}.get(adv.action, "⚪")
+    src_tag = "⭐" if source == "watchlist" else "🔍"
+    title = (
+        f"🤖 AI {adv.action.upper()} {q.symbol} ({adv.confidence:.0%}) {src_tag}"
+    )
+    lines = [
+        f"**{emoji} {adv.action.upper()}**  ·  {q.name}",
+        f"**当前**：${q.price:.2f} {q.currency}",
+    ]
+    if adv.reference_ma:
+        lines.append(f"**参考均线**：{adv.reference_ma}")
+    if adv.buy_legs:
+        lines.append("")
+        lines.append("**分批买入**：")
+        for leg in adv.buy_legs:
+            lines.append(f"  - ${leg['price']:.2f}  仓位 {leg['shares_pct']}%")
+    if adv.sell_legs:
+        lines.append("")
+        lines.append("**分批卖出**：")
+        for leg in adv.sell_legs:
+            lines.append(f"  - ${leg['price']:.2f}  仓位 {leg['shares_pct']}%")
+    if adv.rationale:
+        lines.append("")
+        lines.append(f"**逻辑**：{adv.rationale}")
+    if adv.risk:
+        lines.append(f"**风险**：{adv.risk}")
+    return title, "\n".join(lines)

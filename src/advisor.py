@@ -71,6 +71,7 @@ def advise(
     news: List[Dict],
     horizon: str = "short",
     notes: str = "",
+    macro=None,
 ) -> Optional[Advice]:
     if not advisor_enabled():
         return None
@@ -81,7 +82,7 @@ def advise(
     long_ma = moving_averages(closes_1y, windows=(120, 250))
     mas = {**short_ma, **long_ma}
 
-    prompt = _build_prompt(quote, mas, closes_3mo, news, horizon, notes)
+    prompt = _build_prompt(quote, mas, closes_3mo, news, horizon, notes, macro)
     try:
         raw = _call_qwen(prompt)
     except Exception as e:
@@ -116,13 +117,56 @@ def _closes(df: Optional[pd.DataFrame]) -> pd.Series:
 
 
 def _build_prompt(quote, mas: dict, closes: pd.Series, news: List[Dict],
-                  horizon: str, notes: str) -> str:
+                  horizon: str, notes: str, macro=None) -> str:
     def f(v):
         return "—" if v is None else f"{v:.2f}"
 
     recent = closes.tail(5).round(2).tolist() if len(closes) else []
     vs_ma20 = _pct_vs(quote.price, mas.get("MA20"))
     vs_ma60 = _pct_vs(quote.price, mas.get("MA60"))
+
+    # ── 宏观背景段（规则引擎给的事实，仅作为上下文，不让 LLM 重新判断）──
+    macro_block = ""
+    if macro is not None and getattr(macro, "scenario", 0) > 0:
+        macro_lines = [
+            f"  当前场景: {macro.scenario_name}",
+            f"  策略方向: {macro.action}",
+        ]
+        if macro.vix is not None:
+            macro_lines.append(f"  VIX: {macro.vix:.1f}（{macro.vix_status}）")
+        if macro.spy_drop_pct is not None:
+            macro_lines.append(f"  SPY 距高点: {macro.spy_drop_pct:+.2f}%")
+        if macro.spy_rsp_div_pct is not None:
+            macro_lines.append(
+                f"  SPY-RSP 背离: {macro.spy_rsp_div_pct:+.2f}%（{macro.breadth_status}）"
+            )
+        if macro.hyg_status and macro.hyg_status != "—":
+            macro_lines.append(f"  HYG: {macro.hyg_status}")
+        macro_block = "\n[宏观背景]\n" + "\n".join(macro_lines) + "\n"
+
+    # ── 分析师共识段 ──
+    analyst_lines = []
+    if quote.target_mean_price is not None:
+        diff_pct = (quote.target_mean_price - quote.price) / quote.price * 100
+        line = f"  共识目标价: ${quote.target_mean_price:.2f}（距现价 {diff_pct:+.1f}%）"
+        if quote.target_high_price and quote.target_low_price:
+            line += f"  区间 [${quote.target_low_price:.2f} – ${quote.target_high_price:.2f}]"
+        analyst_lines.append(line)
+    if quote.recommendation_key:
+        rec_line = f"  评级: {quote.recommendation_key}"
+        if quote.recommendation_mean is not None:
+            rec_line += f"（{quote.recommendation_mean:.2f}/5，越小越看多）"
+        if quote.num_analyst_opinions:
+            rec_line += f"  来自 {quote.num_analyst_opinions} 位分析师"
+        analyst_lines.append(rec_line)
+    if quote.forward_eps is not None:
+        fwd_line = f"  Forward EPS: {quote.forward_eps:.2f}"
+        if quote.forward_pe is not None:
+            fwd_line += f"  Forward PE: {quote.forward_pe:.1f}"
+        analyst_lines.append(fwd_line)
+    analyst_block = ""
+    if analyst_lines:
+        analyst_block = "\n[分析师共识 / 前瞻]\n" + "\n".join(analyst_lines) + "\n"
 
     momentum_lines = []
     if quote.williams_r is not None:
@@ -163,11 +207,13 @@ def _build_prompt(quote, mas: dict, closes: pd.Series, news: List[Dict],
         news_block = "\n[新闻] (近 7 天)\n" + "\n".join(lines)
 
     system = (
-        "你是一名美股短线技术面助手。基于给定的指标、价格序列、新闻摘要，"
-        "输出一份严格符合 JSON schema 的交易建议。\n"
+        "你是一名美股短线技术面助手。基于给定的指标、价格序列、新闻摘要、"
+        "宏观场景与分析师共识，输出一份严格符合 JSON schema 的交易建议。\n"
         "- 价格建议必须贴近给定的均线/支撑/阻力位，禁止凭空给数字。\n"
         "- 给出 2 档买入价 + 2 档卖出价，每档配仓位百分比（合计 100%）。\n"
         "  若 action=hold 或建议方向单一，对应另一方向 legs 可为空数组。\n"
+        "- 宏观背景是规则引擎给定的事实，必须采纳作为方向偏置（如场景四防守时勿建议大额加仓）。\n"
+        "- 分析师共识仅作为参考，技术面与你的判断更重要。\n"
         "- 若信号矛盾或证据不足，action=hold 并解释。\n"
         "- rationale 用中文，≤200 字。risk 用中文，≤100 字。\n"
         "- 只输出 JSON，不要 markdown 代码块。"
@@ -177,8 +223,9 @@ def _build_prompt(quote, mas: dict, closes: pd.Series, news: List[Dict],
         f"[标的] {quote.symbol} {quote.name}\n"
         f"[现价] {quote.price:.2f} {quote.currency} "
         f"({_signed_pct(quote.day_change_pct)} 当日)\n"
-        f"[策略] horizon={horizon}  notes=\"{notes[:200]}\"\n\n"
-        f"[趋势]\n"
+        f"[策略] horizon={horizon}  notes=\"{notes[:200]}\""
+        + macro_block + analyst_block
+        + f"\n[趋势]\n"
         f"  MA5={f(mas.get('MA5'))}  MA20={f(mas.get('MA20'))}  "
         f"MA60={f(mas.get('MA60'))}  MA120={f(mas.get('MA120'))}  "
         f"MA250={f(mas.get('MA250'))}\n"

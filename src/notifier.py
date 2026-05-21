@@ -28,6 +28,8 @@ class FeishuNotifier:
             template = "red"
         elif "🟢" in title or "📈" in title or "above" in title.lower() or "🚀" in title:
             template = "green"
+        elif "🟠" in title:
+            template = "orange"
         elif "⚠" in title or "ERROR" in title.upper():
             template = "orange"
         else:
@@ -174,6 +176,64 @@ def render_gainer_alert(q: Quote) -> str:
 
 def render_error_alert(context: str, err: BaseException) -> str:
     return f"**{context}** 执行失败：\n```\n{type(err).__name__}: {err}\n```"
+
+
+def render_macro_briefing(state) -> tuple:
+    """Render a MacroState → (title, lark_md body). Scenario 0 (neutral) 也推一张，
+    告知用户"今日无明确信号"。"""
+    scenario_emoji = {
+        0: "⚪", 1: "🔵", 2: "🟢", 3: "🟢", 4: "🔴", 5: "🟠"
+    }
+    emoji = scenario_emoji.get(state.scenario, "⚪")
+    title = f"📊 大盘简报  {emoji} {state.scenario_name}"
+
+    def _fmt(v, suffix=""):
+        return "—" if v is None else f"{v:+.2f}{suffix}" if suffix == "%" else f"{v:.1f}{suffix}"
+
+    lines = ["**一、核心指标**"]
+    if state.vix is not None:
+        lines.append(f"- VIX: {state.vix:.1f}  ({state.vix_status})")
+    if state.spy_drop_pct is not None:
+        lines.append(f"- SPY 距 252 日高点: {state.spy_drop_pct:+.2f}%")
+    if state.spy_rsp_div_pct is not None:
+        lines.append(f"- SPY-RSP 背离: {state.spy_rsp_div_pct:+.2f}%  ({state.breadth_status})")
+    if state.hyg_5d_pct is not None:
+        lines.append(f"- HYG 5日: {state.hyg_5d_pct:+.2f}%  ({state.hyg_status})")
+    if state.dxy is not None:
+        dxy_chg = f"  20日 {state.dxy_20d_pct:+.2f}%" if state.dxy_20d_pct is not None else ""
+        lines.append(f"- DXY: {state.dxy:.2f}{dxy_chg}  ({state.dxy_status})")
+    lines.append(f"- F&G / AAII: 暂未集成")
+
+    lines.append("")
+    lines.append("**二、场景诊断**")
+    lines.append(f"- 当前归属: {state.scenario_name}")
+    if state.reasons:
+        for r in state.reasons:
+            lines.append(f"  - {r}")
+
+    lines.append("")
+    lines.append("**三、今日指令**")
+    lines.append(f"- 方向: **{state.direction.upper()}**")
+    if state.allocation_pct > 0:
+        lines.append(f"- 仓位: 当前可投入资金的 **{state.allocation_pct}%**")
+    lines.append(f"- {state.action}")
+
+    if state.risks:
+        lines.append("")
+        lines.append("**四、风控**")
+        for r in state.risks:
+            lines.append(f"- {r}")
+
+    lines.append("")
+    lines.append("**📖 指标速查**")
+    lines.append("- **VIX**：标普 500 波动率（恐慌指数）。<15 自满，18–25 升温，>30 恐慌，>35 极端")
+    lines.append("- **SPY 距高点**：标普 500 ETF 离 252 日（约 1 年）新高的距离。回调 3-5% 正常，7-10% 恐惧，>10% 危险")
+    lines.append("- **SPY-RSP 背离**：市值加权 vs 等权重 20 日收益差。>+3% = 少数巨头撑大盘（集中度恶化）")
+    lines.append("- **HYG**：高收益债 ETF（垃圾债）。5 日跌 >3% 或破 50 日均线 = 信用市场预警")
+    lines.append("- **DXY**：美元指数。20 日涨 >3% = 避险性暴涨，全球流动性紧张")
+    lines.append("- **F&G / AAII**：CNN 恐惧贪婪指数、散户看跌比例，本期未集成（需爬虫/FRED）")
+
+    return title, "\n".join(lines)
 
 
 def render_advice(q: Quote, adv, source: str = "watchlist") -> tuple:

@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 from advisor import advise, advisor_enabled, should_push
 from fetcher import Quote, batch_history, fetch_info, get_quote
 from indicators import apply_signals
+from macro import compute_macro_state
 from movers import top_movers
 from news import fetch_news
 from notifier import (
@@ -27,6 +28,7 @@ from notifier import (
     fan_out,
     render_advice,
     render_error_alert,
+    render_macro_briefing,
 )
 from store import (
     count_advice_today,
@@ -34,6 +36,7 @@ from store import (
     get_cached_info,
     list_watchlist,
     put_cached_info,
+    put_macro_state,
     set_alert_state,
 )
 
@@ -119,7 +122,8 @@ def _build_candidates(watchlist_items: List[dict]) -> List[_Candidate]:
     return wl + mv[:quota]
 
 
-def _evaluate_one(c: _Candidate, df_3mo, info_provider, notifiers, now: int) -> Optional[str]:
+def _evaluate_one(c: _Candidate, df_3mo, info_provider, notifiers, now: int,
+                  macro=None) -> Optional[str]:
     """Quote + LLM + push for one candidate. Returns symbol if pushed else None."""
     cooldown_h = float(os.environ.get("ADVISOR_COOLDOWN_HOURS", "6.0"))
     last = get_alert_ts(c.symbol, kind="advice") or 0
@@ -149,7 +153,7 @@ def _evaluate_one(c: _Candidate, df_3mo, info_provider, notifiers, now: int) -> 
         news = []
 
     try:
-        adv = advise(q, df_3mo, df_1y, news, horizon=c.horizon, notes=c.notes)
+        adv = advise(q, df_3mo, df_1y, news, horizon=c.horizon, notes=c.notes, macro=macro)
     except Exception as e:
         print(f"[warn] advisor {c.symbol}: {e}")
         return None
@@ -180,8 +184,29 @@ def _run(notifiers) -> Dict:
           f"(watchlist={sum(1 for c in candidates if c.source=='watchlist')}, "
           f"movers={sum(1 for c in candidates if c.source=='mover')})")
 
+    # ── 算宏观状态（run 开头算一次，单股 prompt + 结尾简报共用）──
+    try:
+        macro = compute_macro_state()
+        print(f"[macro] scenario={macro.scenario} ({macro.scenario_name}) "
+              f"VIX={macro.vix} drop={macro.spy_drop_pct}")
+        # 缓存到 DDB，供 web UI 顶部展示（避免每次打开页面都重算 5 个 yfinance 调用）
+        try:
+            put_macro_state(macro.to_dict())
+        except Exception as e:
+            print(f"[warn] macro cache write failed: {e}")
+    except Exception as e:
+        print(f"[warn] macro compute failed: {e}")
+        macro = None
+
     if not candidates:
-        return {"checked": 0, "pushed": []}
+        # 没有候选也推一张简报
+        if macro is not None:
+            try:
+                t, b = render_macro_briefing(macro)
+                fan_out(notifiers, t, b)
+            except Exception as e:
+                print(f"[warn] macro briefing render failed: {e}")
+        return {"checked": 0, "pushed": [], "macro_scenario": getattr(macro, "scenario", None)}
 
     # Daily budget guard (counts today's advice records in state table)
     budget = int(float(os.environ.get("ADVISOR_DAILY_BUDGET", "200")))
@@ -209,12 +234,24 @@ def _run(notifiers) -> Dict:
         if used >= budget:
             print(f"[advisor] budget hit mid-run, stop at {c.symbol}")
             break
-        result = _evaluate_one(c, hist.get(c.symbol), info_provider, notifiers, now)
+        result = _evaluate_one(c, hist.get(c.symbol), info_provider, notifiers, now, macro=macro)
         used += 1
         if result:
             pushed.append(result)
 
-    return {"checked": len(candidates), "pushed": pushed}
+    # ── 单股都推完后，推一张大盘简报作为 TL;DR ──
+    if macro is not None:
+        try:
+            t, b = render_macro_briefing(macro)
+            fan_out(notifiers, t, b)
+        except Exception as e:
+            print(f"[warn] macro briefing render failed: {e}")
+
+    return {
+        "checked": len(candidates),
+        "pushed": pushed,
+        "macro_scenario": getattr(macro, "scenario", None),
+    }
 
 
 def handler(event, context):

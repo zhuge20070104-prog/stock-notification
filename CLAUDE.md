@@ -41,7 +41,18 @@ python main.py gainers                     # Top20 gainers >= configured pct
 
 **End-to-end deployed test:** [debug.sh](debug.sh) puts a guaranteed-hit watchlist row (`below 99999`), clears the alert state row, invokes the monitor Lambda, then tails CloudWatch logs. Override symbol with `SYMBOL=AMZN ./debug.sh`. Remember to delete the test row from the UI when done.
 
-There are no automated tests in this repo.
+Tests live in [tests/](tests/), pytest-based. Install + run:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+[tests/conftest.py](tests/conftest.py) stubs `yfinance` and `boto3` so the suite runs on dev hosts without those deps. Coverage:
+- `test_macro.py` — 5-scenario classifier edge cases + injectable fetcher
+- `test_advisor_prompt.py` — prompt sections, push gating, sanity checks, JSON parsing
+- `test_fetcher_analyst.py` — analyst field extraction from yfinance info dict
+- `test_notifier_macro.py` — `render_macro_briefing` for each scenario
 
 ## Architecture
 
@@ -64,13 +75,15 @@ The `backend/*_handler.py` files use flat imports (`from fetcher import ...`) be
 
 The monitor is now LLM-first. There are **no** threshold/gainer alert cards anymore — every push is an AI verdict card. Pipeline (mirrored in [backend/monitor_handler.py](backend/monitor_handler.py) and [src/monitor.py](src/monitor.py); the local CLI is the JSON-state mirror of the Lambda DDB-state version):
 
-1. **Build candidate pool**: all watchlist items (unless `strategy_horizon="skip"`) + TECH_TICKERS with `|change_pct| ≥ MOVER_CHANGE_PCT_THRESHOLD` (default 3%). Capped to `ADVISOR_MAX_CANDIDATES` (default 30), watchlist always wins, movers ranked by `|change|`.
-2. **Batched 3mo history** for the whole pool → `apply_signals` (Williams %R / MACD / KST).
-3. For each candidate: per-symbol 1y history (for MA250) + yfinance news → [src/advisor.py](src/advisor.py) `advise()` → Qwen (DashScope OpenAI-compatible API).
-4. **Push gate** ([src/advisor.py](src/advisor.py) `should_push(adv, source)`):
+1. **Compute macro state** ([src/macro.py](src/macro.py)) once at run start. Fetches VIX/SPY/RSP/HYG/DXY, classifies into one of 5 PLAN2 scenarios via deterministic rules. F&G and AAII bearish % are deliberately not integrated (no easy yfinance source); scenario 3 carries a "limited confirmation" risk note in their absence.
+2. **Build candidate pool**: all watchlist items (unless `strategy_horizon="skip"`) + TECH_TICKERS with `|change_pct| ≥ MOVER_CHANGE_PCT_THRESHOLD` (default 3%). Capped to `ADVISOR_MAX_CANDIDATES` (default 30), watchlist always wins, movers ranked by `|change|`.
+3. **Batched 3mo history** for the whole pool → `apply_signals` (Williams %R / MACD / KST).
+4. For each candidate: per-symbol 1y history (for MA250) + yfinance news → [src/advisor.py](src/advisor.py) `advise(..., macro=state)` → Qwen. The prompt embeds `[宏观背景]` (read-only context from rules engine, LLM does NOT reclassify) and `[分析师共识]` (target price / recommendation / forward EPS from yfinance `info`).
+5. **Push gate** ([src/advisor.py](src/advisor.py) `should_push(adv, source)`):
    - **watchlist** + `ALWAYS_PUSH_WATCHLIST=1` (default): push regardless of action/confidence — twice-daily briefing.
    - Otherwise: only `action ∈ {buy, sell}` AND `confidence ≥ ADVISOR_PUSH_MIN_CONFIDENCE` (default 0.55). `hold` and low-confidence are silent.
-5. Per-symbol 6h cooldown via state table with `kind="advice"`. Daily budget guard (`ADVISOR_DAILY_BUDGET`, default 200).
+6. **End-of-run macro briefing**: after all individual stock cards, `render_macro_briefing(state)` pushes one TL;DR card (PLAN2 template) showing the day's scenario + recommended allocation. This is rule-output only — never goes through the LLM, zero token cost.
+7. Per-symbol 6h cooldown via state table with `kind="advice"`. Daily budget guard (`ADVISOR_DAILY_BUDGET`, default 200).
 
 Card title encodes source: `⭐` = watchlist, `🔍` = mover-discovery (off-watchlist).
 

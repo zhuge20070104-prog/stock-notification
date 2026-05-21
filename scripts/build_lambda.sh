@@ -9,7 +9,7 @@ rm -rf "$BUILD_DIR" "$ZIP"
 mkdir -p "$BUILD_DIR"
 
 # 1. handlers + shared lib
-cp "$ROOT/src/advisor.py" "$ROOT/src/fetcher.py" "$ROOT/src/indicators.py" "$ROOT/src/lookup.py" "$ROOT/src/movers.py" "$ROOT/src/news.py" "$ROOT/src/notifier.py" "$ROOT/src/store.py" "$BUILD_DIR/"
+cp "$ROOT/src/advisor.py" "$ROOT/src/fetcher.py" "$ROOT/src/indicators.py" "$ROOT/src/lookup.py" "$ROOT/src/macro.py" "$ROOT/src/movers.py" "$ROOT/src/news.py" "$ROOT/src/notifier.py" "$ROOT/src/store.py" "$BUILD_DIR/"
 cp "$ROOT/backend/api_handler.py" "$ROOT/backend/monitor_handler.py" "$BUILD_DIR/"
 
 # 2. Install deps as Linux wheels (Lambda runs amazonlinux2 / x86_64).

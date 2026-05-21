@@ -47,4 +47,5 @@ export const api = {
   quote:  (syms) => call(`/quote?symbols=${syms.map(encodeURIComponent).join(",")}`),
   search: (q) => call(`/search?q=${encodeURIComponent(q)}`),
   movers: (limit = 20, dir = "both") => call(`/movers?limit=${limit}&dir=${encodeURIComponent(dir)}`),
+  macro:  () => call("/macro"),
 };

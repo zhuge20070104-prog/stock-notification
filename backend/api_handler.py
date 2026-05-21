@@ -16,6 +16,7 @@ from movers import top_movers
 from store import (
     delete_watchlist,
     get_cached_info,
+    get_macro_state,
     list_watchlist,
     put_cached_info,
     upsert_watchlist,
@@ -137,6 +138,12 @@ def _route(event):
         if not q:
             return _resp(400, {"error": "q required"})
         return _resp(200, do_search(q))
+
+    if path == "/macro" and method == "GET":
+        cached = get_macro_state()
+        if cached is None:
+            return _resp(200, {"state": None, "updated_at": 0})
+        return _resp(200, cached)
 
     if path == "/movers" and method == "GET":
         try:

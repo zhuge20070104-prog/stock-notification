@@ -59,6 +59,34 @@ h2 { font-size: 16px; margin: 0; font-weight: 600; }
 .search { display: flex; gap: 8px; margin-bottom: 12px; }
 .search input { flex: 1; }
 
+.macro-card {
+  padding: 12px 14px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  border-left: 4px solid var(--border);
+  background: var(--card);
+}
+.macro-card.macro-neutral { border-left-color: #888; }
+.macro-card.macro-blue    { border-left-color: #3b82f6; }
+.macro-card.macro-green   { border-left-color: #10b981; }
+.macro-card.macro-orange  { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.08); }
+.macro-card.macro-red     { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.10); }
+
+.macro-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.macro-action { text-align: right; }
+.macro-direction { font-weight: 700; letter-spacing: 1px; font-size: 14px; }
+.macro-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 14px;
+}
+.macro-list {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.macro-list li { margin: 3px 0; }
+
 input, select, button {
   font-size: 16px;
   padding: 10px 12px;

@@ -32,6 +32,15 @@ class Quote:
     macd_signal: Optional[str] = None
     kst_value: Optional[float] = None
     kst_signal: Optional[str] = None
+    # 分析师共识 & 前瞻指引（yfinance 提供）
+    target_mean_price: Optional[float] = None
+    target_high_price: Optional[float] = None
+    target_low_price: Optional[float] = None
+    recommendation_key: Optional[str] = None     # buy/hold/sell/strong_buy/strong_sell/underperform
+    recommendation_mean: Optional[float] = None  # 1-5 数值化共识，越小越看多
+    num_analyst_opinions: Optional[int] = None
+    forward_eps: Optional[float] = None
+    earnings_date: Optional[str] = None          # 下次财报日期 (ISO)
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -93,6 +102,10 @@ _INFO_FIELDS_TO_CACHE = (
     "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "dividendYield", "beta",
     "shortName", "longName", "currency",
+    # 分析师共识 + 前瞻
+    "targetMeanPrice", "targetHighPrice", "targetLowPrice",
+    "recommendationKey", "recommendationMean", "numberOfAnalystOpinions",
+    "forwardEps",
 )
 
 
@@ -131,6 +144,12 @@ def get_quote(symbol: str, info_provider: Optional[Callable[[str], Dict]] = None
     elif div_y is not None:
         div_y = round(div_y * 100.0, 2)
 
+    num_analysts = info.get("numberOfAnalystOpinions")
+    try:
+        num_analysts = int(num_analysts) if num_analysts is not None else None
+    except (TypeError, ValueError):
+        num_analysts = None
+
     return Quote(
         symbol=sym,
         price=price,
@@ -151,6 +170,13 @@ def get_quote(symbol: str, info_provider: Optional[Callable[[str], Dict]] = None
         week52_low=_f(info.get("fiftyTwoWeekLow")),
         dividend_yield=div_y,
         beta=_f(info.get("beta")),
+        target_mean_price=_f(info.get("targetMeanPrice")),
+        target_high_price=_f(info.get("targetHighPrice")),
+        target_low_price=_f(info.get("targetLowPrice")),
+        recommendation_key=info.get("recommendationKey") or None,
+        recommendation_mean=_f(info.get("recommendationMean")),
+        num_analyst_opinions=num_analysts,
+        forward_eps=_f(info.get("forwardEps")),
     )
 
 

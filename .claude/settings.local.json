@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(tail -25)",
+      "PowerShell(tail -20)",
+      "PowerShell(tail -10)"
+    ]
+  }
+}

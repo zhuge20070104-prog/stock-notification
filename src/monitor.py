@@ -14,6 +14,7 @@ from typing import Callable, Dict, List, Optional
 from .advisor import advise, advisor_enabled, should_push
 from .fetcher import Quote, batch_history, fetch_info, get_quote
 from .indicators import apply_signals
+from .macro import compute_macro_state
 from .movers import top_movers
 from .news import fetch_news
 from .notifier import (
@@ -21,6 +22,7 @@ from .notifier import (
     fan_out,
     render_advice,
     render_error_alert,
+    render_macro_briefing,
 )
 
 
@@ -118,7 +120,8 @@ def _build_candidates(watchlist_items: List[dict]) -> List[_Candidate]:
 
 
 def _evaluate_one(c: _Candidate, df_3mo, info_provider,
-                  notifiers: List[Notifier], state: dict, now: int) -> Optional[str]:
+                  notifiers: List[Notifier], state: dict, now: int,
+                  macro=None) -> Optional[str]:
     cooldown_h = float(os.environ.get("ADVISOR_COOLDOWN_HOURS", "6.0"))
     last = int((state.get(f"{c.symbol}#advice") or {}).get("last_alert_ts", 0))
     if now - last < int(cooldown_h * 3600):
@@ -147,7 +150,7 @@ def _evaluate_one(c: _Candidate, df_3mo, info_provider,
         news = []
 
     try:
-        adv = advise(q, df_3mo, df_1y, news, horizon=c.horizon, notes=c.notes)
+        adv = advise(q, df_3mo, df_1y, news, horizon=c.horizon, notes=c.notes, macro=macro)
     except Exception as e:
         print(f"[warn] advisor {c.symbol}: {e}")
         return None
@@ -183,8 +186,22 @@ def check_once(
     print(f"[run] candidates: {len(candidates)} "
           f"(watchlist={sum(1 for c in candidates if c.source=='watchlist')}, "
           f"movers={sum(1 for c in candidates if c.source=='mover')})")
+
+    try:
+        macro = compute_macro_state()
+        print(f"[macro] scenario={macro.scenario} ({macro.scenario_name})")
+    except Exception as e:
+        print(f"[warn] macro compute failed: {e}")
+        macro = None
+
     if not candidates:
-        return {"checked": 0, "pushed": []}
+        if macro is not None:
+            try:
+                t, b = render_macro_briefing(macro)
+                fan_out(notifiers, t, b)
+            except Exception as e:
+                print(f"[warn] macro briefing render failed: {e}")
+        return {"checked": 0, "pushed": [], "macro_scenario": getattr(macro, "scenario", None)}
 
     budget = int(float(os.environ.get("ADVISOR_DAILY_BUDGET", "200")))
     today = datetime.datetime.utcfromtimestamp(now).strftime("%Y-%m-%d")
@@ -213,16 +230,27 @@ def check_once(
         if used >= budget:
             print(f"[advisor] budget hit mid-run, stop at {c.symbol}")
             break
-        r = _evaluate_one(c, hist.get(c.symbol), info_provider, notifiers, state, now)
+        r = _evaluate_one(c, hist.get(c.symbol), info_provider, notifiers, state, now, macro=macro)
         used += 1
         if r:
             pushed.append(r)
+
+    if macro is not None:
+        try:
+            t, b = render_macro_briefing(macro)
+            fan_out(notifiers, t, b)
+        except Exception as e:
+            print(f"[warn] macro briefing render failed: {e}")
 
     flush = getattr(info_provider, "flush", None)
     if callable(flush):
         flush()
     _save_json(state, state_path)
-    return {"checked": len(candidates), "pushed": pushed}
+    return {
+        "checked": len(candidates),
+        "pushed": pushed,
+        "macro_scenario": getattr(macro, "scenario", None),
+    }
 
 
 def check_with_failure_alert(

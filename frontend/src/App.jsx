@@ -14,6 +14,8 @@ export default function App() {
   const [moversDir, setMoversDir] = useState("both");
   const [movers, setMovers] = useState([]);
   const [moversLoading, setMoversLoading] = useState(false);
+  const [macro, setMacro] = useState(null);
+  const [macroUpdatedAt, setMacroUpdatedAt] = useState(0);
 
   const refresh = async () => {
     setError(""); setLoading(true);
@@ -32,6 +34,14 @@ export default function App() {
       setError(e.message || String(e));
     } finally {
       setLoading(false);
+    }
+    // 宏观状态独立加载（失败也不阻塞主列表）
+    try {
+      const m = await api.macro();
+      setMacro(m?.state || null);
+      setMacroUpdatedAt(m?.updated_at || 0);
+    } catch {
+      // 默默忽略（首次部署可能还没缓存）
     }
   };
 
@@ -107,6 +117,8 @@ export default function App() {
       </header>
 
       {error && <div className="error">{error}</div>}
+
+      <MacroBriefing state={macro} updatedAt={macroUpdatedAt} />
 
       <div className="search">
         <input
@@ -320,6 +332,97 @@ function WatchCard({ item, quote, onSave, onRemove }) {
         </div>
       )}
     </li>
+  );
+}
+
+const SCENARIO_EMOJI = { 0: "⚪", 1: "🔵", 2: "🟢", 3: "🟢", 4: "🔴", 5: "🟠" };
+const SCENARIO_CLASS = {
+  0: "macro-neutral",
+  1: "macro-blue",
+  2: "macro-green",
+  3: "macro-green",
+  4: "macro-red",
+  5: "macro-orange",
+};
+
+function MacroBriefing({ state, updatedAt }) {
+  const [open, setOpen] = useState(false);
+  if (!state) {
+    return (
+      <div className="macro-card macro-neutral">
+        <div className="muted small">📊 大盘简报：暂无数据，等待首次定时触发（北京时间 10:00 / 18:00）</div>
+      </div>
+    );
+  }
+  const scenario = state.scenario ?? 0;
+  const emoji = SCENARIO_EMOJI[scenario] || "⚪";
+  const cls = SCENARIO_CLASS[scenario] || "macro-neutral";
+
+  const fmtAge = (ts) => {
+    if (!ts) return "";
+    const ageMin = Math.floor((Date.now() / 1000 - ts) / 60);
+    if (ageMin < 1) return "刚刚";
+    if (ageMin < 60) return `${ageMin} 分钟前`;
+    const h = Math.floor(ageMin / 60);
+    if (h < 24) return `${h} 小时前`;
+    return `${Math.floor(h / 24)} 天前`;
+  };
+
+  const fmtPct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
+  const fmtNum = (v, d = 1) => (v == null ? "—" : v.toFixed(d));
+
+  return (
+    <div className={`macro-card ${cls}`}>
+      <div className="row-between" onClick={() => setOpen(!open)} style={{ cursor: "pointer" }}>
+        <div>
+          <div className="macro-title">{emoji} {state.scenario_name || "未判定"}</div>
+          <div className="muted small">
+            VIX {fmtNum(state.vix)} · SPY {fmtPct(state.spy_drop_pct)} · 背离 {fmtPct(state.spy_rsp_div_pct)}
+            {updatedAt ? <> · 更新 {fmtAge(updatedAt)}</> : null}
+          </div>
+        </div>
+        <div className="macro-action">
+          <div className="macro-direction">{(state.direction || "wait").toUpperCase()}</div>
+          {state.allocation_pct > 0 && <div className="small">{state.allocation_pct}%</div>}
+        </div>
+      </div>
+      {open && (
+        <div className="macro-detail">
+          <div className="muted small mt"><strong>核心指标</strong></div>
+          <ul className="macro-list">
+            <li>VIX：{fmtNum(state.vix)}（{state.vix_status || "—"}）<span className="muted small"> · 恐慌指数，&lt;15 自满，&gt;30 恐慌</span></li>
+            <li>SPY 距 252 日高点：{fmtPct(state.spy_drop_pct)}<span className="muted small"> · 衡量回调深度</span></li>
+            <li>SPY-RSP 背离：{fmtPct(state.spy_rsp_div_pct)}（{state.breadth_status || "—"}）<span className="muted small"> · 大盘集中度，&gt;+3% 少数巨头拉升</span></li>
+            <li>HYG 5日：{fmtPct(state.hyg_5d_pct)}（{state.hyg_status || "—"}）<span className="muted small"> · 高收益债，破位 = 信用预警</span></li>
+            <li>DXY：{fmtNum(state.dxy, 2)}（{state.dxy_status || "—"}）<span className="muted small"> · 美元指数，暴涨 = 流动性紧张</span></li>
+          </ul>
+          {state.action && (
+            <div className="mt">
+              <strong>今日指令：</strong>{state.action}
+            </div>
+          )}
+          {state.reasons && state.reasons.length > 0 && (
+            <div className="mt">
+              <strong>诊断依据：</strong>
+              <ul className="macro-list">
+                {state.reasons.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            </div>
+          )}
+          {state.risks && state.risks.length > 0 && (
+            <div className="mt">
+              <strong>风控提示：</strong>
+              <ul className="macro-list">
+                {state.risks.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="muted small mt" style={{ textAlign: "right" }}>
+        {open ? "▴ 收起" : "▾ 展开详情"}
+      </div>
+    </div>
   );
 }
 

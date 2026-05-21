@@ -81,6 +81,35 @@ def get_alert_ts(symbol: str, kind: str = "threshold") -> Optional[int]:
     return int(ts) if ts is not None else None
 
 
+_MACRO_KEY = "__macro_latest"
+
+
+def put_macro_state(state_dict: Dict) -> None:
+    """Cache the latest MacroState (as dict) in the state table. Read by api_handler
+    to serve the dashboard without recomputing yfinance fetches on every page load."""
+    _state().put_item(Item={
+        "symbol": _MACRO_KEY,
+        "last_alert_ts": int(time.time()),
+        "data": json.dumps(state_dict, default=str, ensure_ascii=False),
+    })
+
+
+def get_macro_state() -> Optional[Dict]:
+    """Return {"updated_at": int, "state": dict} or None if not cached yet."""
+    r = _state().get_item(Key={"symbol": _MACRO_KEY})
+    item = r.get("Item")
+    if not item:
+        return None
+    raw = item.get("data")
+    if not isinstance(raw, str):
+        return None
+    try:
+        state = json.loads(raw)
+    except Exception:
+        return None
+    return {"updated_at": int(item.get("last_alert_ts") or 0), "state": state}
+
+
 def count_advice_today(date_str: str) -> int:
     """Count advice records emitted today. Cheap-ish: scans state table once per call.
     Acceptable because daily volume is tiny (<200) and advisor only runs on alert."""
